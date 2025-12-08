@@ -42,7 +42,8 @@ const INITIAL_NODES: Node[] = [
         id: 'start', 
         type: 'start', 
         position: { x: 0, y: 0 }, 
-        data: {} 
+        data: {},
+        style: { width: 480 } // Hint for initial layout
     }
 ];
 
@@ -123,6 +124,14 @@ export const CanvasContent: React.FC = () => {
 
     const { fitView, getNodes, screenToFlowPosition, deleteElements } = useReactFlow();
 
+    // Force fit view on mount to ensure start node is visible
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fitView({ padding: 0.2, duration: 800 });
+        }, 100);
+        return () => clearTimeout(timer);
+    }, [fitView]);
+
     // Undo/Redo Logic
     const takeSnapshot = () => {
         setPast(prev => [...prev.slice(-9), { nodes, edges }]); // Keep last 10
@@ -155,9 +164,13 @@ export const CanvasContent: React.FC = () => {
     }, [nodes, edges]);
 
     useEffect(() => {
-        const stored = localStorage.getItem('kleem_sessions');
-        if (stored) {
-            setSessions(JSON.parse(stored));
+        try {
+            const stored = localStorage.getItem('kleem_sessions');
+            if (stored) {
+                setSessions(JSON.parse(stored));
+            }
+        } catch(e) {
+            console.warn("Could not load sessions from localStorage", e);
         }
     }, []);
 
@@ -165,13 +178,17 @@ export const CanvasContent: React.FC = () => {
         const newSession: Session = { id: Date.now().toString(), topic, createdAt: Date.now(), course };
         const updated = [newSession, ...sessions];
         setSessions(updated);
-        localStorage.setItem('kleem_sessions', JSON.stringify(updated));
+        try {
+            localStorage.setItem('kleem_sessions', JSON.stringify(updated));
+        } catch(e) { console.warn("Failed to save session", e); }
     };
 
     const handleClearHistory = () => {
         if (confirm("Are you sure you want to clear your study history?")) {
             setSessions([]);
-            localStorage.removeItem('kleem_sessions');
+            try {
+                localStorage.removeItem('kleem_sessions');
+            } catch(e) {}
         }
     };
 
@@ -382,6 +399,15 @@ export const CanvasContent: React.FC = () => {
         }
     };
 
+    const onConnect = useCallback((params: Connection) => {
+        pushHistory();
+        setEdges((eds) => addEdge(params, eds));
+    }, [pushHistory, setEdges]);
+
+    const onNodeDragStart = useCallback(() => {
+        pushHistory();
+    }, [pushHistory]);
+
     useEffect(() => {
         setNodes(nds => nds.map(n => {
             if (n.id === 'start') {
@@ -421,9 +447,10 @@ export const CanvasContent: React.FC = () => {
                 edges={edges}
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
-                onConnect={params => setEdges(eds => addEdge(params, eds))}
+                onConnect={onConnect}
                 onConnectStart={onConnectStart}
                 onConnectEnd={onConnectEnd}
+                onNodeDragStart={onNodeDragStart}
                 onSelectionChange={({ nodes: selected }) => { if(selected.length) setFocusedNodeId(selected[0].id) }}
                 nodeTypes={nodeTypes}
                 fitView
