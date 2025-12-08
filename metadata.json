@@ -1,0 +1,8 @@
+{
+  "name": "Kleem AI",
+  "description": "An open-source AI study assistant that turns course materials into a personal tutor, featuring live voice interaction, exam prep with thinking models, and multimodal content generation.",
+  "requestFramePermissions": [
+    "microphone",
+    "camera"
+  ]
+}

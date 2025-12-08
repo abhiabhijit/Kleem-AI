@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kleem AI - Study OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reactflow@11.10.4/dist/style.min.css" />
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            colors: {
+              kleem: {
+                yellow: '#FEF08A', // Yellow-200/300 mix
+                purple: '#E9D5FF', // Purple-200
+                mint: '#CCFBF1',   // Teal-100
+                black: '#18181b',
+                offwhite: '#FAFAFA'
+              }
+            },
+            boxShadow: {
+              'hard': '4px 4px 0px 0px rgba(0,0,0,1)',
+              'hard-sm': '2px 2px 0px 0px rgba(0,0,0,1)',
+              'hard-lg': '8px 8px 0px 0px rgba(0,0,0,1)',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      :root {
+        --background: 0 0% 100%;
+        --foreground: 222.2 84% 4.9%;
+      }
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f3f4f6;
+        background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+        background-size: 24px 24px;
+      }
+      
+      /* Markdown Styles tailored for bold readability */
+      .markdown-content h1 { font-size: 2em; font-weight: 800; margin-bottom: 0.5em; margin-top: 1em; letter-spacing: -0.02em; }
+      .markdown-content h2 { font-size: 1.5em; font-weight: 700; margin-bottom: 0.5em; margin-top: 1em; }
+      .markdown-content p { margin-bottom: 1em; line-height: 1.6; color: #18181b; font-weight: 500; }
+      .markdown-content ul { list-style-type: disc; padding-left: 1.5em; margin-bottom: 1em; }
+      .markdown-content strong { font-weight: 800; }
+      
+      /* React Flow Overrides for Brutalist Theme */
+      .react-flow__node {
+        border-radius: 0; /* Strict corners for some, rounded for others via component */
+      }
+      .react-flow__handle {
+        width: 12px;
+        height: 12px;
+        background: #000;
+        border: 2px solid white;
+      }
+      .react-flow__controls {
+        box-shadow: 4px 4px 0px 0px rgba(0,0,0,1);
+        border: 2px solid black;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .react-flow__controls-button {
+        border-bottom: 2px solid black;
+        background: white;
+        color: black;
+      }
+      .react-flow__controls-button:hover {
+        background: #FEF08A;
+      }
+      .react-flow__attribution {
+        display: none;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.1/",
+    "react": "https://aistudiocdn.com/react@^19.2.1",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.1/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.31.0",
+    "gsap": "https://aistudiocdn.com/gsap@3.12.5",
+    "reactflow": "https://aistudiocdn.com/reactflow@11.10.4/dist/esm/index.js",
+    "zustand": "https://aistudiocdn.com/zustand@4.5.0/esm/index.js",
+    "zustand/shallow": "https://aistudiocdn.com/zustand@4.5.0/esm/shallow.js",
+    "classnames": "https://aistudiocdn.com/classnames@2.5.1",
+    "react-dom": "https://aistudiocdn.com/react-dom@^19.2.1"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
