@@ -1,4 +1,5 @@
 
+
 // Global types for AI Studio and App
 declare global {
   interface AIStudio {
@@ -79,6 +80,8 @@ export interface Session {
     topic: string;
     createdAt: number;
     course: Course;
+    graphState?: { nodes: any[], edges: any[] };
+    lastModified?: number;
 }
 
 // React Flow Types (Implicitly used but defined here for structured data props)
@@ -87,6 +90,7 @@ export type NodeData = {
     onStart?: (topic: string, attachments: Attachment[]) => Promise<void>;
     history?: Session[];
     onResume?: (session: Session) => void;
+    onClearHistory?: () => void;
     
     // Curriculum Node
     course?: Course;
@@ -96,8 +100,29 @@ export type NodeData = {
     moduleTitle?: string;
     moduleId?: string;
     topic?: string;
+    lessonContent?: LessonContent; // Persistence
+    onAction?: (action: 'SLIDES' | 'CODE', data: any) => void; // New Action Handler
+    
+    // Quiz Node
+    quizContent?: QuizQuestion[]; // Persistence
+    
+    // Slide Node
+    slideContent?: Slide[]; // Persistence
+    
+    // Code Node
+    code?: string; // Persistence
+    language?: string;
+    chatHistory?: { role: string; text: string }[]; // Persistence for Code Assistant
+    isAssistantOpen?: boolean;
+    
+    // Media Node
+    mediaUrl?: string;
+    mediaType?: 'image' | 'video';
+    mediaAnalysis?: string; // Persistence
     
     // Generic
     label?: string;
+    context?: string;
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
 }

@@ -11,24 +11,34 @@ interface QuizNodeProps {
   data: {
     topic: string;
     context?: string;
+    quizContent?: QuizQuestion[];
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
   };
   selected?: boolean;
 }
 
-export const QuizNodeContent: React.FC<QuizNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ topic, context, isFullScreen, onClose, onMaximize, nodeId }) => {
-    const [quiz, setQuiz] = useState<QuizQuestion[]>([]);
+export const QuizNodeContent: React.FC<QuizNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ topic, context, quizContent, isFullScreen, onClose, onMaximize, nodeId, onNavigate }) => {
+    const [quiz, setQuiz] = useState<QuizQuestion[]>(quizContent || []);
     const [answers, setAnswers] = useState<number[]>([]);
     const [submitted, setSubmitted] = useState(false);
-    const [loading, setLoading] = useState(true);
-    const { deleteElements } = useReactFlow();
+    const [loading, setLoading] = useState(!quizContent);
+    const { deleteElements, setNodes } = useReactFlow();
 
     useEffect(() => {
+        if (quizContent) {
+            setQuiz(quizContent);
+            setAnswers(new Array(quizContent.length).fill(-1));
+            setLoading(false);
+            return;
+        }
+
         const fetchQuiz = async () => {
             try {
                 const data = await generateQuizOnly(topic, context);
                 setQuiz(data);
                 setAnswers(new Array(data.length).fill(-1));
+                setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, quizContent: data } } : n));
             } catch (e) {
                 console.error(e);
             } finally {
@@ -55,7 +65,19 @@ export const QuizNodeContent: React.FC<QuizNodeProps['data'] & { nodeId: string;
                     <span className="material-symbols-outlined text-yellow-400">quiz</span>
                     <span className="font-bold uppercase tracking-wider text-sm">Quiz: {topic.substring(0, 15)}...</span>
                 </div>
+
                 <div className="flex items-center gap-2">
+                    {/* Navigation Buttons for Full Screen */}
+                    {isFullScreen && onNavigate && (
+                        <div className="flex gap-1 mr-2">
+                             <button onClick={() => onNavigate('prev')} className="p-1 hover:bg-gray-800 rounded transition-colors" title="Previous Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-white">arrow_back</span>
+                             </button>
+                             <button onClick={() => onNavigate('next')} className="p-1 hover:bg-gray-800 rounded transition-colors" title="Next Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-white">arrow_forward</span>
+                             </button>
+                        </div>
+                    )}
                     <button onClick={onMaximize} className="p-1 hover:bg-gray-800 rounded text-white"><span className="material-symbols-outlined text-sm">{isFullScreen ? 'close_fullscreen' : 'check_box_outline_blank'}</span></button>
                     <button onClick={handleClose} className="p-1 hover:bg-red-600 rounded text-white"><span className="material-symbols-outlined text-sm">close</span></button>
                 </div>

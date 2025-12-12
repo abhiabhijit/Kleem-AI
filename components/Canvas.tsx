@@ -75,7 +75,7 @@ const NodeMenu = ({ x, y, onSelect, onPrompt, onClose }: { x: number, y: number,
                         value={input}
                         onChange={e => setInput(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && handlePrompt()}
-                        className="w-full text-sm p-2 pr-8 border border-gray-300 rounded outline-none focus:border-black transition-colors text-black bg-white" 
+                        className="w-full text-sm p-2 pr-8 border border-gray-300 rounded outline-none focus:border-black transition-colors text-black bg-white placeholder-gray-500 font-medium" 
                         placeholder="Ask AI for next step..."
                         disabled={isThinking}
                         autoFocus
@@ -122,7 +122,7 @@ export const CanvasContent: React.FC = () => {
     // Refs for connection tracking
     const connectStartParams = useRef<{ nodeId: string | null; handleId: string | null }>({ nodeId: null, handleId: null });
 
-    const { fitView, getNodes, screenToFlowPosition, deleteElements } = useReactFlow();
+    const { fitView, getNodes, getEdges, getNode, screenToFlowPosition, deleteElements } = useReactFlow();
 
     // Force fit view on mount to ensure start node is visible
     useEffect(() => {
@@ -192,6 +192,86 @@ export const CanvasContent: React.FC = () => {
         }
     };
 
+    // --- Node Navigation ---
+    const handleNavigate = useCallback((nodeId: string, direction: 'prev' | 'next') => {
+        const nodes = getNodes();
+        const edges = getEdges();
+        const currentNode = nodes.find(n => n.id === nodeId);
+        if (!currentNode) return;
+
+        let targetId: string | null = null;
+
+        // Helper: Get sorted children nodes for a given parent ID
+        const getSortedChildren = (parentId: string) => {
+             const childEdges = edges.filter(e => e.source === parentId);
+             const childNodes = childEdges
+                .map(e => nodes.find(n => n.id === e.target))
+                .filter(Boolean) as Node[];
+             // Sort by Y position (visual vertical stack)
+             return childNodes.sort((a, b) => a.position.y - b.position.y);
+        };
+
+        if (direction === 'next') {
+            // Priority 1: Go to first Child (Drill down)
+            const children = getSortedChildren(nodeId);
+            if (children.length > 0) {
+                targetId = children[0].id;
+            } else {
+                // Priority 2: Go to Next Sibling (Traverse across) OR Parent's Next Sibling (Traverse Up/Across)
+                let walker = nodeId;
+                while (walker) {
+                    const incomingEdge = edges.find(e => e.target === walker);
+                    if (!incomingEdge) break; // Root reached
+
+                    const siblings = getSortedChildren(incomingEdge.source);
+                    const currentIndex = siblings.findIndex(n => n.id === walker);
+
+                    if (currentIndex !== -1 && currentIndex < siblings.length - 1) {
+                        targetId = siblings[currentIndex + 1].id;
+                        break;
+                    }
+                    // If last sibling, loop up to parent to check its siblings
+                    walker = incomingEdge.source;
+                }
+            }
+        } else {
+            // Prev Logic
+            const incomingEdge = edges.find(e => e.target === nodeId);
+            if (incomingEdge) {
+                const siblings = getSortedChildren(incomingEdge.source);
+                const currentIndex = siblings.findIndex(n => n.id === nodeId);
+                
+                if (currentIndex > 0) {
+                    // Go to Previous Sibling
+                    targetId = siblings[currentIndex - 1].id;
+                } else {
+                    // Go to Parent
+                    targetId = incomingEdge.source;
+                }
+            }
+        }
+
+        if (targetId) {
+            setFocusedNodeId(targetId);
+
+            const targetNode = nodes.find(n => n.id === targetId);
+            const isTargetFullScreen = targetNode?.data?.isFullScreen;
+            const isCurrentFullScreen = currentNode.data?.isFullScreen;
+
+            if (isCurrentFullScreen) {
+                // If currently full screen, switch full screen to the new node
+                setNodes(nds => nds.map(n => {
+                    if (n.id === nodeId) return { ...n, data: { ...n.data, isFullScreen: false } };
+                    if (n.id === targetId) return { ...n, data: { ...n.data, isFullScreen: true } };
+                    return n;
+                }));
+            } else {
+                // Otherwise just pan camera
+                fitView({ nodes: [{id: targetId}], duration: 800, padding: 0.2 });
+            }
+        }
+    }, [getNodes, getEdges, setNodes, fitView]);
+
     const handleStart = async (topic: string, attachments: Attachment[], onProgress?: (status: string) => void) => {
         const effectiveTopic = topic || (attachments.length > 0 ? "Uploaded Materials" : "General Study");
         if (onProgress) onProgress("ANALYZING & PLANNING...");
@@ -227,28 +307,58 @@ export const CanvasContent: React.FC = () => {
 
     // --- Node Addition Logic ---
 
-    const addNodeGeneric = (type: string, data: any, position?: {x: number, y: number}, parentId?: string) => {
+    const addNodeGeneric = (type: string, data: any, position?: {x: number, y: number}, parentId?: string, explicitId?: string) => {
         pushHistory();
-        const id = `${type}-${Date.now()}`;
+        const id = explicitId || `${type}-${Date.now()}`;
         
-        // Better positioning logic
         let pos = position;
+        
         if (!pos) {
             if (parentId) {
-                const parent = nodes.find(n => n.id === parentId);
-                if (parent) pos = { x: parent.position.x + 500, y: parent.position.y };
+                // Use getNode() to get fresh state, avoiding stale closures
+                const parent = getNode(parentId);
+                if (parent) {
+                    // Check for existing children to offset positions and prevent overlaps
+                    const existingChildren = getEdges().filter(e => e.source === parentId).length;
+                    
+                    // Vertical Stacking: Move Right (600px) and Down (child index * 600px)
+                    // This ensures vertical alignment for sub-nodes
+                    const xOffset = 600; 
+                    const ySpacing = 600;
+                    
+                    pos = { 
+                        x: parent.position.x + xOffset, 
+                        y: parent.position.y + (existingChildren * ySpacing) 
+                    };
+                }
             } else if (focusedNodeId) {
-                const focused = nodes.find(n => n.id === focusedNodeId);
-                if (focused) pos = { x: focused.position.x + 500, y: focused.position.y };
+                const focused = getNode(focusedNodeId);
+                if (focused) pos = { x: focused.position.x + 600, y: focused.position.y };
             }
         }
-        if (!pos) pos = { x: 100, y: 100 };
+        
+        // Fallback positioning (prevent sticking to 0,0)
+        if (!pos) {
+            const count = getNodes().length;
+            pos = { x: 100 + (count * 30), y: 100 + (count * 30) };
+        }
 
         const newNode: Node = {
             id,
             type,
             position: pos,
-            data: { ...data, isFullScreen: false },
+            data: { 
+                ...data, 
+                isFullScreen: false,
+                onNavigate: (dir: 'prev'|'next') => handleNavigate(id, dir),
+                // Pass persistent handlers if needed
+                 ...(type === 'start' ? {
+                     onStart: handleStart,
+                     history: sessions,
+                     onResume: handleResume,
+                     onClearHistory: handleClearHistory
+                } : {})
+            },
             dragHandle: '.custom-drag-handle' 
         };
 
@@ -260,7 +370,8 @@ export const CanvasContent: React.FC = () => {
                 source: parentId,
                 target: id,
                 animated: true,
-                style: { stroke: '#000', strokeWidth: 3 }
+                style: { stroke: '#000', strokeWidth: 3 },
+                type: 'smoothstep'
             };
             setEdges(eds => eds.concat(newEdge));
         }
@@ -268,19 +379,47 @@ export const CanvasContent: React.FC = () => {
         setTimeout(() => {
             setFocusedNodeId(id);
             fitView({ nodes: [{id}], duration: 800, padding: 0.2 });
-        }, 100);
+        }, 150);
         return id;
     };
 
+    // New handler for actions triggered by nodes
+    const handleNodeAction = (sourceId: string, action: string, payload: any) => {
+        const sourceNode = getNode(sourceId);
+        if (!sourceNode) return;
+        
+        const topic = sourceNode.data.topic || "General Topic";
+
+        if (action === 'SLIDES') {
+            addNodeGeneric('slides', { 
+                topic, 
+                context: payload.markdownContent 
+            }, undefined, sourceId);
+        } else if (action === 'CODE') {
+            addNodeGeneric('code', { 
+                language: 'python',
+                code: payload.code || "# Start coding...",
+                context: payload.context 
+            }, undefined, sourceId);
+        }
+    };
+
     const addCurriculumNode = (course: Course) => {
+        const id = `curriculum-${Date.now()}`;
         addNodeGeneric('curriculum', { 
             course,
-            onSelectModule: (mod: CourseModule) => addStudyNode(mod, `curr-${Date.now()}`, course.title) // ID fix needed? actually parentId is dynamic
-        }, { x: 600, y: 0 }, 'start');
+            onSelectModule: (mod: CourseModule) => addStudyNode(mod, id, course.title) // Pass explicit ID as parent
+        }, { x: 600, y: 0 }, 'start', id);
     };
 
     const addStudyNode = (mod: CourseModule, parentId: string, topic: string) => {
-        addNodeGeneric('study', { moduleTitle: mod.title, moduleId: mod.id, topic }, undefined, parentId);
+        const id = `study-${Date.now()}`;
+        addNodeGeneric('study', { 
+            moduleTitle: mod.title, 
+            moduleId: mod.id, 
+            topic,
+            onAction: (action: string, payload: any) => handleNodeAction(id, action, payload)
+        }, undefined, parentId, id);
     };
 
     // --- Command Interpretation ---
@@ -292,34 +431,27 @@ export const CanvasContent: React.FC = () => {
             const parent = sourceNodeId || focusedNodeId;
             let contextTopic = '';
             
-            // Context merging if possible
             let contextData: any = {};
-            // Default position if not provided (offset from parent)
             let position = targetPosition;
 
             if (parent) {
-                const pNode = nodes.find(n => n.id === parent);
-                // Attempt to grab topic/context from parent data
-                if (pNode?.data?.topic) contextTopic = pNode.data.topic;
-                else if (pNode?.data?.moduleTitle) contextTopic = pNode.data.moduleTitle;
-                
-                contextData.topic = contextTopic;
-                if (pNode?.data?.markdownContent) contextData.context = pNode.data.markdownContent;
+                const pNode = getNode(parent); // Use fresh node data
+                if (pNode) {
+                    if (pNode.data?.topic) contextTopic = pNode.data.topic;
+                    else if (pNode.data?.moduleTitle) contextTopic = pNode.data.moduleTitle;
+                    
+                    contextData.topic = contextTopic;
+                    if (pNode.data?.markdownContent) contextData.context = pNode.data.markdownContent;
 
-                // Only calculate offset position if targetPosition wasn't provided
-                if (!position && sourceNodeId && pNode) {
-                    position = { x: pNode.position.x + 500, y: pNode.position.y };
+                    // If explicit position wasn't passed, generic logic in addNodeGeneric handles it
                 }
             }
             
             const cmd = await interpretAgentCommand(prompt, contextTopic);
 
-            // If cmd.data.topic is missing, we use contextData.topic. If cmd has it, we use it.
             const finalData = { ...contextData, ...cmd.data };
-            // Ensure we don't have empty topic
             if (!finalData.topic) finalData.topic = "General Study";
 
-            // Type specific data patches
              if (cmd.type === 'study') {
                  if (!finalData.moduleTitle) finalData.moduleTitle = finalData.topic;
                  if (!finalData.moduleId) finalData.moduleId = `gen-${Date.now()}`;
@@ -348,7 +480,6 @@ export const CanvasContent: React.FC = () => {
 
         if (isPane && connectStartParams.current.nodeId) {
             const { clientX, clientY } = 'changedTouches' in event ? (event as any).changedTouches[0] : (event as MouseEvent);
-            // setMenu position
             setMenuState({
                 visible: true,
                 x: clientX, 
@@ -362,14 +493,13 @@ export const CanvasContent: React.FC = () => {
     const handleMenuSelect = (type: string) => {
         if (!menuState.sourceNodeId) return;
         
-        const sourceNode = nodes.find(n => n.id === menuState.sourceNodeId);
+        const sourceNode = getNode(menuState.sourceNodeId);
         const position = screenToFlowPosition({ x: menuState.x, y: menuState.y });
         
-        // Pass context
         const contextData: any = {};
         if (sourceNode?.data?.topic) contextData.topic = sourceNode.data.topic;
         else if (sourceNode?.data?.moduleTitle) contextData.topic = sourceNode.data.moduleTitle;
-        else contextData.topic = "General Topic"; // Fallback
+        else contextData.topic = "General Topic";
 
         if (sourceNode?.data?.markdownContent) contextData.context = sourceNode.data.markdownContent;
 
@@ -381,9 +511,8 @@ export const CanvasContent: React.FC = () => {
 
     const toggleLiveNode = () => {
         pushHistory();
-        const liveNodes = nodes.filter(n => n.type === 'live');
+        const liveNodes = getNodes().filter(n => n.type === 'live');
         if (liveNodes.length > 0) {
-            // Remove all live nodes if toggled off
             deleteElements({ nodes: liveNodes });
         } else {
              const flowCenter = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
@@ -393,7 +522,7 @@ export const CanvasContent: React.FC = () => {
 
     const handleDeleteSelected = () => {
         pushHistory();
-        const selected = nodes.filter(n => n.selected);
+        const selected = getNodes().filter(n => n.selected);
         if (selected.length > 0) {
              deleteElements({ nodes: selected });
         }
@@ -408,37 +537,43 @@ export const CanvasContent: React.FC = () => {
         pushHistory();
     }, [pushHistory]);
 
+    // Keep start node logic fresh
     useEffect(() => {
-        setNodes(nds => nds.map(n => {
-            if (n.id === 'start') {
-                return {
-                    ...n,
-                    data: {
-                        onStart: handleStart,
-                        history: sessions,
-                        onResume: handleResume,
-                        onClearHistory: handleClearHistory
-                    }
-                };
+        setNodes(nds => nds.map(n => ({
+            ...n,
+            data: {
+                ...n.data,
+                onNavigate: (dir: 'prev'|'next') => handleNavigate(n.id, dir),
+                ...(n.type === 'start' ? {
+                     onStart: handleStart,
+                     history: sessions,
+                     onResume: handleResume,
+                     onClearHistory: handleClearHistory
+                } : {})
             }
-            return n;
-        }));
-    }, [sessions]);
+        })));
+    }, [sessions, handleNavigate]); 
 
     // Handle ESC and Fullscreen Close events
     useEffect(() => {
         const closeHandler = () => setNodes(nds => nds.map(n => ({ ...n, data: { ...n.data, isFullScreen: false } })));
         window.addEventListener('close-fullscreen', closeHandler);
+        
         const keyHandler = (e: KeyboardEvent) => {
+            const target = e.target as HTMLElement;
+            // Prevent deletion if user is typing in an input
+            if (target.matches('input, textarea, [contenteditable]')) return;
+
             if (e.key === 'Escape') closeHandler();
             if (e.key === 'Backspace' || e.key === 'Delete') handleDeleteSelected();
         };
+
         window.addEventListener('keydown', keyHandler);
         return () => {
             window.removeEventListener('close-fullscreen', closeHandler);
             window.removeEventListener('keydown', keyHandler);
         }
-    }, [nodes]); // Dep on nodes for delete
+    }, [handleDeleteSelected]); // Ensure fresh handler logic
 
     return (
         <div className="w-full h-screen bg-[#f3f4f6] relative">
@@ -456,6 +591,7 @@ export const CanvasContent: React.FC = () => {
                 fitView
                 minZoom={0.2}
                 maxZoom={2}
+                deleteKeyCode={null} // Disable React Flow default deletion to handle it globally with input protection
                 defaultEdgeOptions={{ type: 'smoothstep' }}
                 proOptions={{ hideAttribution: true }}
                 onPaneClick={() => setMenuState(p => ({ ...p, visible: false }))}
@@ -477,7 +613,6 @@ export const CanvasContent: React.FC = () => {
                     y={menuState.y} 
                     onSelect={handleMenuSelect}
                     onPrompt={(txt) => {
-                        // Calculate position at drop point
                         const position = screenToFlowPosition({ x: menuState.x, y: menuState.y });
                         handleCommandSubmit(txt, menuState.sourceNodeId || undefined, position);
                     }} 
@@ -502,10 +637,30 @@ export const CanvasContent: React.FC = () => {
                     {isProcessingCommand && <span className="w-3 h-3 border-2 border-black border-t-transparent rounded-full animate-spin"></span>}
                  </div>
 
-                 {/* Fit View Nav */}
-                 <button className="flex flex-col items-center gap-1 text-black hover:text-blue-600 transition-colors" onClick={() => fitView({ duration: 800, padding: 0.2 })} title="Fit View">
-                     <span className="material-symbols-outlined text-2xl">crop_free</span>
-                 </button>
+                 {/* Navigation & Fit View Group */}
+                 <div className="flex items-center gap-2 border-r-2 border-gray-100 pr-4 mr-2">
+                    <button 
+                         className="flex items-center justify-center p-1 rounded hover:bg-gray-100 disabled:opacity-30 text-black" 
+                         onClick={() => focusedNodeId && handleNavigate(focusedNodeId, 'prev')}
+                         disabled={!focusedNodeId}
+                         title="Previous Node"
+                     >
+                         <span className="material-symbols-outlined">arrow_back</span>
+                     </button>
+
+                     <button className="flex flex-col items-center gap-1 text-black hover:text-blue-600 transition-colors" onClick={() => fitView({ duration: 800, padding: 0.2 })} title="Fit View">
+                         <span className="material-symbols-outlined text-2xl">crop_free</span>
+                     </button>
+
+                     <button 
+                         className="flex items-center justify-center p-1 rounded hover:bg-gray-100 disabled:opacity-30 text-black" 
+                         onClick={() => focusedNodeId && handleNavigate(focusedNodeId, 'next')}
+                         disabled={!focusedNodeId}
+                         title="Next Node"
+                     >
+                         <span className="material-symbols-outlined">arrow_forward</span>
+                     </button>
+                 </div>
 
                  {/* Delete & Undo/Redo Group */}
                  <div className="flex items-center gap-2 border-x-2 border-gray-100 px-4">
@@ -532,9 +687,13 @@ export const CanvasContent: React.FC = () => {
                      <span className="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">perm_media</span>
                  </button>
 
+                 <button className="flex flex-col items-center gap-1 text-black hover:text-green-600 transition-colors group" onClick={() => addNodeGeneric('code', {}, undefined, focusedNodeId || undefined)} title="Add Code Sandbox">
+                     <span className="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">terminal</span>
+                 </button>
+
                  <button className="flex flex-col items-center gap-1 text-black hover:text-red-500 transition-colors group relative" onClick={toggleLiveNode} title="Toggle Live Tutor">
                      <span className="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">mic</span>
-                     {nodes.some(n => n.type === 'live') && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
+                     {getNodes().some(n => n.type === 'live') && <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
                  </button>
             </div>
         </div>

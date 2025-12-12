@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Handle, Position, NodeResizer, useReactFlow } from 'reactflow';
 import ReactDOM from 'react-dom';
 import classNames from 'classnames';
-import { generateLessonContent, streamChatResponse, generatePodcastScript, generatePodcastAudio } from '../../services/geminiService';
+import { generateLessonContent, streamChatResponse, generatePodcastScript, generatePodcastAudio, generatePracticeCode } from '../../services/geminiService';
 import { LessonContent } from '../../types';
 
 interface StudyNodeProps {
@@ -12,12 +12,68 @@ interface StudyNodeProps {
     moduleTitle: string;
     moduleId: string;
     topic: string;
+    lessonContent?: LessonContent;
+    onAction?: (action: 'SLIDES' | 'CODE', data: any) => void;
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
   };
   selected?: boolean;
 }
 
 // --- Internal Components ---
+
+// Helper for chat markdown
+const parseInline = (text: string, isDark: boolean) => {
+    const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g);
+    return parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={index} className={isDark ? "font-bold text-yellow-200" : "font-bold text-black"}>{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('`') && part.endsWith('`')) {
+            return <code key={index} className={isDark ? "bg-white/20 px-1 rounded text-xs font-mono mx-1" : "bg-gray-100 px-1 rounded text-xs font-mono text-red-600 border border-gray-200 mx-1"}>{part.slice(1, -1)}</code>;
+        }
+        return part;
+    });
+}
+
+const ChatMarkdown = ({ content, isUser }: { content: string, isUser: boolean }) => {
+    return (
+        <div className="space-y-1">
+            {content.split('\n').map((line, i) => {
+                const trimmed = line.trim();
+                
+                // Headers
+                if (trimmed.startsWith('### ')) return <h3 key={i} className={`font-bold text-sm mt-2 ${isUser ? 'text-white' : 'text-black'}`}>{parseInline(trimmed.slice(4), isUser)}</h3>
+                if (trimmed.startsWith('## ')) return <h2 key={i} className={`font-bold text-base mt-2 border-b ${isUser ? 'border-white/30' : 'border-gray-200'} pb-1`}>{parseInline(trimmed.slice(3), isUser)}</h2>
+
+                // Bullets
+                if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+                    return (
+                        <div key={i} className="flex gap-2 ml-1">
+                            <span className={isUser ? "text-yellow-200 font-bold" : "text-yellow-600 font-bold"}>•</span>
+                            <span className="flex-1">{parseInline(trimmed.slice(2), isUser)}</span>
+                        </div>
+                    )
+                }
+
+                // Numbered
+                const numMatch = trimmed.match(/^(\d+)\.\s(.*)/);
+                if (numMatch) {
+                     return (
+                        <div key={i} className="flex gap-2 ml-1">
+                            <span className={isUser ? "font-bold text-yellow-200" : "font-bold text-gray-500"}>{numMatch[1]}.</span>
+                            <span className="flex-1">{parseInline(numMatch[2], isUser)}</span>
+                        </div>
+                     )
+                }
+                
+                if (!trimmed) return <div key={i} className="h-2"></div>
+
+                return <p key={i} className="leading-relaxed whitespace-pre-wrap">{parseInline(line, isUser)}</p>
+            })}
+        </div>
+    )
+}
 
 const ChatView = ({ context, topic, suggestedQuestions }: { context: string, topic: string, suggestedQuestions?: string[] }) => {
     const [msgs, setMsgs] = useState<{role: string, text: string}[]>([]);
@@ -73,7 +129,7 @@ const ChatView = ({ context, topic, suggestedQuestions }: { context: string, top
                 {msgs.map((m, i) => (
                     <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                          <div className={`p-4 rounded-xl text-sm font-medium border-2 max-w-[85%] shadow-sm ${m.role === 'user' ? 'bg-black text-white border-black rounded-br-none' : 'bg-white text-black border-black rounded-bl-none'}`}>
-                            {m.text}
+                            <ChatMarkdown content={m.text} isUser={m.role === 'user'} />
                         </div>
                     </div>
                 ))}
@@ -173,14 +229,21 @@ const AudioOverview = ({ context, topic }: { context: string, topic: string }) =
     );
 };
 
-export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ moduleTitle, moduleId, topic, isFullScreen, onClose, onMaximize, nodeId }) => {
-    const [content, setContent] = useState<LessonContent | null>(null);
-    const [loading, setLoading] = useState(true);
+export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ moduleTitle, moduleId, topic, lessonContent, onAction, isFullScreen, onClose, onMaximize, nodeId, onNavigate }) => {
+    const [content, setContent] = useState<LessonContent | null>(lessonContent || null);
+    const [loading, setLoading] = useState(!lessonContent);
     const [loadingMsg, setLoadingMsg] = useState('Generating Lesson...');
+    const [generatingCode, setGeneratingCode] = useState(false);
     const [tab, setTab] = useState<'READ' | 'CHAT' | 'LISTEN'>('READ');
-    const { deleteElements } = useReactFlow();
+    const { deleteElements, setNodes } = useReactFlow();
 
     useEffect(() => {
+        if (lessonContent) {
+            setContent(lessonContent);
+            setLoading(false);
+            return;
+        }
+
         let mounted = true;
         const fetchContent = async () => {
             try {
@@ -188,6 +251,13 @@ export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: strin
                 if (mounted) {
                     setContent(res);
                     setLoading(false);
+                    // Persist content to node data
+                    setNodes(nds => nds.map(n => {
+                        if (n.id === nodeId) {
+                            return { ...n, data: { ...n.data, lessonContent: res } };
+                        }
+                        return n;
+                    }));
                 }
             } catch(e) { console.error(e); if(mounted) setLoading(false); }
         };
@@ -198,6 +268,27 @@ export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: strin
     const handleClose = () => {
         if (onClose) onClose();
         else deleteElements({ nodes: [{ id: nodeId }] });
+    };
+
+    const handleGenerateSlides = () => {
+        if (onAction && content?.markdownContent) {
+            onAction('SLIDES', { markdownContent: content.markdownContent });
+        }
+    };
+
+    const handlePracticeCode = async () => {
+        if (onAction && content?.markdownContent) {
+            setGeneratingCode(true);
+            try {
+                // Generate a starter snippet based on the content
+                const code = await generatePracticeCode(topic, content.markdownContent);
+                onAction('CODE', { code, context: content.markdownContent });
+            } catch (e) {
+                console.error(e);
+            } finally {
+                setGeneratingCode(false);
+            }
+        }
     };
 
     return (
@@ -223,6 +314,18 @@ export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: strin
                         <span className="material-symbols-outlined text-[10px] font-bold text-gray-500">lock</span>
                         <span className="text-xs font-bold truncate text-gray-700">kleem://learn/{moduleId}</span>
                     </div>
+
+                    {/* Navigation Buttons for Full Screen */}
+                    {isFullScreen && onNavigate && (
+                        <div className="flex gap-1">
+                             <button onClick={() => onNavigate('prev')} className="p-1 hover:bg-black/10 rounded transition-colors" title="Previous Node">
+                                <span className="material-symbols-outlined text-base font-bold text-black">arrow_back</span>
+                             </button>
+                             <button onClick={() => onNavigate('next')} className="p-1 hover:bg-black/10 rounded transition-colors" title="Next Node">
+                                <span className="material-symbols-outlined text-base font-bold text-black">arrow_forward</span>
+                             </button>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex items-center gap-2 ml-4">
@@ -275,9 +378,34 @@ export const StudyNodeContent: React.FC<StudyNodeProps['data'] & { nodeId: strin
                          {/* Page Title Header (Inside content - only for READ) */}
                         {tab === 'READ' && (
                             <div className="border-b border-gray-100 p-6 bg-white flex-shrink-0">
-                                 <div className="max-w-4xl mx-auto">
-                                    <span className="text-[10px] font-black text-kleem-mint-darker uppercase tracking-widest bg-kleem-mint/30 px-2 py-1 rounded text-teal-800">Module Lesson</span>
-                                    <h1 className="text-2xl md:text-3xl font-black text-black mt-2 leading-tight">{moduleTitle}</h1>
+                                 <div className="max-w-4xl mx-auto flex justify-between items-start">
+                                    <div>
+                                        <span className="text-[10px] font-black text-kleem-mint-darker uppercase tracking-widest bg-kleem-mint/30 px-2 py-1 rounded text-teal-800">Module Lesson</span>
+                                        <h1 className="text-2xl md:text-3xl font-black text-black mt-2 leading-tight">{moduleTitle}</h1>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button 
+                                            onClick={handleGenerateSlides}
+                                            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-200 rounded-lg hover:border-black hover:bg-gray-50 transition-all text-xs font-bold text-black shadow-sm"
+                                            title="Generate Slides from Lesson"
+                                        >
+                                            <span className="material-symbols-outlined text-lg">slideshow</span>
+                                            Slides
+                                        </button>
+                                        <button 
+                                            onClick={handlePracticeCode}
+                                            disabled={generatingCode}
+                                            className="flex items-center gap-1.5 px-3 py-2 bg-black text-white rounded-lg border-2 border-black hover:bg-gray-800 transition-all text-xs font-bold shadow-sm"
+                                            title="Practice Code in IDE"
+                                        >
+                                            {generatingCode ? (
+                                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                                            ) : (
+                                                <span className="material-symbols-outlined text-lg">terminal</span>
+                                            )}
+                                            Code
+                                        </button>
+                                    </div>
                                  </div>
                             </div>
                         )}

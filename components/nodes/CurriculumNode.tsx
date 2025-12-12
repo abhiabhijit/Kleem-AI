@@ -11,10 +11,11 @@ interface CurriculumNodeProps {
     course: Course;
     onSelectModule: (module: CourseModule) => void;
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
   };
 }
 
-export const CurriculumNodeContent: React.FC<CurriculumNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ course, onSelectModule, isFullScreen, onClose, onMaximize, nodeId }) => {
+export const CurriculumNodeContent: React.FC<CurriculumNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ course, onSelectModule, isFullScreen, onClose, onMaximize, nodeId, onNavigate }) => {
     const { deleteElements } = useReactFlow();
 
     const handleClose = () => {
@@ -42,6 +43,17 @@ export const CurriculumNodeContent: React.FC<CurriculumNodeProps['data'] & { nod
                     </div>
                 </div>
                 <div className="flex items-center gap-2 ml-2">
+                     {/* Navigation Buttons for Full Screen */}
+                     {isFullScreen && onNavigate && (
+                        <div className="flex gap-1 mr-2">
+                             <button onClick={() => onNavigate('prev')} className="p-1 hover:bg-black/10 rounded transition-colors" title="Previous Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-black">arrow_back</span>
+                             </button>
+                             <button onClick={() => onNavigate('next')} className="p-1 hover:bg-black/10 rounded transition-colors" title="Next Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-black">arrow_forward</span>
+                             </button>
+                        </div>
+                    )}
                      <button onClick={onMaximize} className="p-1 hover:bg-black/10 rounded"><span className="material-symbols-outlined text-sm text-black">{isFullScreen ? 'close_fullscreen' : 'crop_square'}</span></button>
                      <button onClick={handleClose} className="p-1 hover:bg-red-500 hover:text-white rounded text-black"><span className="material-symbols-outlined text-sm">close</span></button>
                 </div>

@@ -11,25 +11,34 @@ interface SlideNodeProps {
   data: {
     topic: string;
     context?: string;
+    slideContent?: Slide[];
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
   };
   selected?: boolean;
 }
 
-export const SlideNodeContent: React.FC<SlideNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ topic, context, isFullScreen, onClose, onMaximize, nodeId }) => {
-    const [slides, setSlides] = useState<Slide[]>([]);
+export const SlideNodeContent: React.FC<SlideNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ topic, context, slideContent, isFullScreen, onClose, onMaximize, nodeId, onNavigate }) => {
+    const [slides, setSlides] = useState<Slide[]>(slideContent || []);
     const [current, setCurrent] = useState(0);
     const [images, setImages] = useState<Record<number, string>>({});
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(!slideContent);
     const [isPresenting, setIsPresenting] = useState(false);
     const [audioUrl, setAudioUrl] = useState<string | null>(null);
-    const { deleteElements } = useReactFlow();
+    const { deleteElements, setNodes } = useReactFlow();
 
     useEffect(() => {
+        if (slideContent) {
+            setSlides(slideContent);
+            setLoading(false);
+            return;
+        }
+
         const fetchSlides = async () => {
             try {
                 const data = await generateSlidesOnly(topic, context);
                 setSlides(data);
+                setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, slideContent: data } } : n));
             } catch (e) { console.error(e); } 
             finally { setLoading(false); }
         };
@@ -74,6 +83,12 @@ export const SlideNodeContent: React.FC<SlideNodeProps['data'] & { nodeId: strin
             
             {/* Header controls for non-fullscreen mode inside the black box */}
             <div className="absolute top-0 right-0 p-2 z-20 flex gap-2">
+                 {isFullScreen && onNavigate && (
+                     <>
+                        <button onClick={() => onNavigate('prev')} className="p-1 bg-black/50 hover:bg-white/20 rounded-full text-white"><span className="material-symbols-outlined text-sm">arrow_back</span></button>
+                        <button onClick={() => onNavigate('next')} className="p-1 bg-black/50 hover:bg-white/20 rounded-full text-white"><span className="material-symbols-outlined text-sm">arrow_forward</span></button>
+                     </>
+                 )}
                  <button onClick={onMaximize} className="p-1 bg-black/50 hover:bg-white/20 rounded-full text-white"><span className="material-symbols-outlined text-sm">{isFullScreen ? 'close_fullscreen' : 'crop_square'}</span></button>
                  <button onClick={handleClose} className="p-1 bg-black/50 hover:bg-red-500/80 rounded-full text-white"><span className="material-symbols-outlined text-sm">close</span></button>
             </div>

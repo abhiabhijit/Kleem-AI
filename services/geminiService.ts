@@ -84,6 +84,58 @@ export const streamChatResponse = async function* (
   }
 };
 
+export const streamCodeTutor = async function* (
+    history: { role: string; parts: { text: string }[] }[],
+    newMessage: string,
+    currentCode: string,
+    language: string
+) {
+    const ai = getAIClient();
+    const systemInstruction = `You are an expert ${language} coding tutor. 
+    The user is working in an IDE. Always answer based on their code context.
+    
+    If they ask for "review", look for bugs, logic errors, or style improvements.
+    If they ask for "boilerplate" or "practice", provide starter code they can copy.
+    Keep explanations concise and helpful.
+    `;
+
+    const chat = ai.chats.create({
+        model: 'gemini-3-pro-preview', // Use Pro for better coding reasoning
+        history: history,
+        config: { systemInstruction }
+    });
+
+    // Inject code context into the message invisibly to the user history perspective if we wanted, 
+    // but here we just append it to the prompt so the model sees it.
+    const promptWithContext = `[Current Code Context]:\n\`\`\`${language}\n${currentCode}\n\`\`\`\n\nUser Question: ${newMessage}`;
+
+    const result = await chat.sendMessageStream({ message: promptWithContext });
+
+    for await (const chunk of result) {
+        const c = chunk as GenerateContentResponse;
+        yield c;
+    }
+}
+
+export const generatePracticeCode = async (topic: string, context: string) => {
+    const ai = getAIClient();
+    const prompt = `Generate a Python coding exercise for the topic "${topic}".
+    Context: ${context.substring(0, 2000)}...
+    
+    Return ONLY valid python code. Include comments explaining the task.
+    Do not use markdown blocks. Just the code.`;
+    
+    const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: { parts: [{ text: prompt }] }
+    });
+    
+    let text = response.text || "";
+    // Strip markdown if present
+    text = text.replace(/```python/g, "").replace(/```/g, "");
+    return text;
+}
+
 // --- Exam Prep (Thinking) ---
 
 export const generateExamPlan = async function* (topic: string, attachments: Attachment[] = []) {
@@ -105,7 +157,7 @@ export const generateExamPlan = async function* (topic: string, attachments: Att
   });
 
   // Add URLs and Topic to text prompt
-  let textPrompt = `Prepare a high-level exam strategy and study plan. `;
+  let textPrompt = `Prepare a detailed exam strategy and comprehensive study plan. `;
   
   const urls = attachments.filter(a => a.type === 'url').map(a => a.data);
   if (urls.length > 0) {
@@ -118,7 +170,7 @@ export const generateExamPlan = async function* (topic: string, attachments: Att
     textPrompt += `\nAnalyze the provided documents/images to determine the subject matter.`;
   }
 
-  textPrompt += `\nFocus on the top 3-5 critical areas to master based on the provided context.`;
+  textPrompt += `\nProvide a comprehensive breakdown of the subject. Identify all key concepts and structure them into a logical learning path from beginner to advanced. Cover as much detail as possible to ensure mastery.`;
 
   parts.push({ text: textPrompt });
 
@@ -167,16 +219,23 @@ export const generateCurriculum = async (topic: string, plan: string, onProgress
   const ai = getAIClient();
   if (onProgress) onProgress("Drafting course structure...");
   
-  // Simplified prompt to reduce token usage and risk of 500 error
-  const prompt = `Create a structured course for '${topic || 'this subject'}' based on the plan below.
-  Plan Summary: ${plan.substring(0, 2000)}...
+  // Prompt optimized for extensive and structured output
+  const prompt = `Create a comprehensive, multi-module course for '${topic || 'this subject'}' based on the study plan below.
+  
+  CRITICAL INSTRUCTIONS:
+  - The course MUST be extensive. Do not create a short summary.
+  - Generate as many modules as necessary (aim for 10-15 modules or more) to fully cover the topic in depth.
+  - Order the modules strictly by complexity: Foundations -> Intermediate Concepts -> Advanced Applications.
+  - Ensure a logical flow where each module builds on the previous one.
+  
+  Plan Context: ${plan.substring(0, 8000)}...
   
   Return a valid JSON object ONLY:
   {
     "title": "Course Title",
-    "description": "Short description",
+    "description": "Comprehensive description",
     "modules": [
-      { "id": "1", "title": "Module Name", "description": "Brief summary", "concepts": ["Key Concept 1"] }
+      { "id": "1", "title": "Module Name", "description": "Detailed summary", "concepts": ["Key Concept 1", "Key Concept 2"] }
     ]
   }`;
 
@@ -200,15 +259,15 @@ export const generateCurriculum = async (topic: string, plan: string, onProgress
 
 export const generateLessonContent = async (moduleId: string, moduleTitle: string, topic: string): Promise<LessonContent> => {
   const ai = getAIClient();
-  const prompt = `Create a lesson for "${moduleTitle}" in "${topic}".
+  const prompt = `Create a detailed lesson for "${moduleTitle}" in the course "${topic}".
   Return JSON:
   {
-    "markdownContent": "Detailed explanation with markdown.",
+    "markdownContent": "Extensive explanation with headers, examples, and markdown formatting.",
     "slides": [{ "title": "Slide Title", "bullets": ["Point 1"], "imagePrompt": "Visual description" }],
     "quiz": [{ "question": "Q1", "options": ["A","B"], "correctIndex": 0, "explanation": "Why" }],
     "suggestedQuestions": ["Question 1", "Question 2", "Question 3"]
   }
-  Keep it concise.`;
+  Keep it educational and engaging.`;
 
   const response = await ai.models.generateContent({
     model: "gemini-2.5-flash",

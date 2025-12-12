@@ -10,18 +10,19 @@ interface MediaNodeProps {
   data: {
     mediaUrl?: string;
     mediaType?: 'image' | 'video';
-    analysis?: string;
+    mediaAnalysis?: string;
     isFullScreen?: boolean;
+    onNavigate?: (direction: 'prev' | 'next') => void;
   };
   selected?: boolean;
 }
 
-export const MediaNodeContent: React.FC<MediaNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ mediaUrl: initialUrl, mediaType: initialType, analysis: initialAnalysis, isFullScreen, onClose, onMaximize, nodeId }) => {
+export const MediaNodeContent: React.FC<MediaNodeProps['data'] & { nodeId: string; onClose?: () => void; onMaximize?: () => void }> = ({ mediaUrl: initialUrl, mediaType: initialType, mediaAnalysis, isFullScreen, onClose, onMaximize, nodeId, onNavigate }) => {
     const [url, setUrl] = useState(initialUrl || '');
     const [type, setType] = useState<'image' | 'video'>(initialType || 'image');
-    const [analysis, setAnalysis] = useState(initialAnalysis || '');
+    const [analysis, setAnalysis] = useState(mediaAnalysis || '');
     const [isLoading, setIsLoading] = useState(false);
-    const { deleteElements } = useReactFlow();
+    const { deleteElements, setNodes } = useReactFlow();
 
     const handleAnalyze = async () => {
         if (!url) return;
@@ -31,6 +32,8 @@ export const MediaNodeContent: React.FC<MediaNodeProps['data'] & { nodeId: strin
             const prompt = "Analyze this media and generate a study summary with key points and educational value.";
             const result = await analyzeMedia(url, type, prompt);
             setAnalysis(result);
+            // Persist
+            setNodes(nds => nds.map(n => n.id === nodeId ? { ...n, data: { ...n.data, mediaAnalysis: result, mediaUrl: url, mediaType: type } } : n));
         } catch (error) {
             setAnalysis(`Error: ${error}`);
         } finally {
@@ -56,6 +59,17 @@ export const MediaNodeContent: React.FC<MediaNodeProps['data'] & { nodeId: strin
                     <span className="text-black text-sm font-bold uppercase tracking-wider">Media Analyzer</span>
                 </div>
                 <div className="flex items-center gap-2">
+                     {/* Navigation Buttons for Full Screen */}
+                     {isFullScreen && onNavigate && (
+                        <div className="flex gap-1 mr-2">
+                             <button onClick={() => onNavigate('prev')} className="p-1 hover:bg-teal-200 rounded transition-colors" title="Previous Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-teal-900">arrow_back</span>
+                             </button>
+                             <button onClick={() => onNavigate('next')} className="p-1 hover:bg-teal-200 rounded transition-colors" title="Next Node">
+                                <span className="material-symbols-outlined text-sm font-bold text-teal-900">arrow_forward</span>
+                             </button>
+                        </div>
+                    )}
                     <button onClick={onMaximize} className="p-1 hover:bg-teal-200 rounded text-teal-900"><span className="material-symbols-outlined text-sm">{isFullScreen ? 'close_fullscreen' : 'check_box_outline_blank'}</span></button>
                     <button onClick={handleClose} className="p-1 hover:bg-red-500 rounded hover:text-white text-teal-900"><span className="material-symbols-outlined text-sm">close</span></button>
                 </div>
