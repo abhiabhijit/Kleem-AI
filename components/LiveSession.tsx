@@ -1,3 +1,5 @@
+
+
 import React, { useEffect, useRef, useState } from 'react';
 import { getLiveClient } from '../services/geminiService';
 import { LiveServerMessage, Modality } from '@google/genai';
@@ -56,18 +58,31 @@ async function decodeAudioData(
 
 export const LiveSession: React.FC = () => {
   const [isActive, setIsActive] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [status, setStatus] = useState('Ready to connect');
   
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   
   // Refs for cleanup
-  const sessionRef = useRef<any>(null);
+  const sessionRef = useRef<Promise<any> | null>(null);
   const inputContextRef = useRef<AudioContext | null>(null);
   const outputContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartTimeRef = useRef<number>(0);
+
+  // Helper to stop all screen share tracks
+  const cleanupScreenShare = () => {
+      if (screenStreamRef.current) {
+          screenStreamRef.current.getTracks().forEach(t => t.stop());
+          screenStreamRef.current = null;
+      }
+      if (videoRef.current) {
+          videoRef.current.srcObject = null;
+      }
+      setIsScreenSharing(false);
+  };
 
   const startSession = async () => {
     try {
@@ -76,8 +91,16 @@ export const LiveSession: React.FC = () => {
       
       const inputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       const outputCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      
+      // CRITICAL: Explicitly resume contexts to prevent auto-suspend timeouts
+      await inputCtx.resume();
+      await outputCtx.resume();
+
       inputContextRef.current = inputCtx;
       outputContextRef.current = outputCtx;
+      
+      // Reset timing cursor
+      nextStartTimeRef.current = 0;
       
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -86,7 +109,7 @@ export const LiveSession: React.FC = () => {
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         callbacks: {
           onopen: () => {
-            setStatus('Connected. Listening...');
+            setStatus('Live');
             setIsActive(true);
             
             // Setup Audio Input
@@ -132,10 +155,11 @@ export const LiveSession: React.FC = () => {
           onclose: () => {
             setStatus('Disconnected');
             setIsActive(false);
+            // Don't kill screen share on disconnect, user might want to reconnect
           },
           onerror: (e) => {
             console.error(e);
-            setStatus('Error occurred');
+            setStatus('Connection Error');
             setIsActive(false);
           }
         },
@@ -144,7 +168,8 @@ export const LiveSession: React.FC = () => {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } }
           },
-          systemInstruction: 'You are a helpful, encouraging tutor. Keep answers concise and conversational.',
+          // System Instruction: Enforce English/User Language
+          systemInstruction: 'You are a helpful, encouraging tutor. You can see the user\'s screen if they share it. Answer questions about what is on screen. Keep answers concise. CRITICAL: Always speak in the same language as the user. If the user speaks English, you MUST speak English.',
         }
       });
       sessionRef.current = sessionPromise;
@@ -156,9 +181,14 @@ export const LiveSession: React.FC = () => {
   };
 
   const stopSession = async () => {
+    // We optionally keep screen share running, but here we stop everything for a clean break
+    cleanupScreenShare();
+    
     if (sessionRef.current) {
-        const session = await sessionRef.current;
-        session.close();
+        try {
+            const session = await sessionRef.current;
+            session.close();
+        } catch(e) { console.log('Session already closed'); }
     }
     if (streamRef.current) {
         streamRef.current.getTracks().forEach(t => t.stop());
@@ -170,50 +200,177 @@ export const LiveSession: React.FC = () => {
     setStatus('Session ended');
   };
 
+  const handleToggleScreenShare = async () => {
+      if (isScreenSharing) {
+          cleanupScreenShare();
+      } else {
+          try {
+              if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                  alert("Screen sharing is not supported in this browser or environment (ensure you are using HTTPS).");
+                  return;
+              }
+
+              // This must be triggered by a user gesture.
+              const stream = await navigator.mediaDevices.getDisplayMedia({ 
+                  video: {
+                      cursor: "always"
+                  } as any,
+                  audio: false 
+              });
+              
+              screenStreamRef.current = stream;
+              
+              if (videoRef.current) {
+                  videoRef.current.srcObject = stream;
+                  await videoRef.current.play();
+              }
+              
+              setIsScreenSharing(true);
+
+              // Handle user stopping via browser UI
+              stream.getVideoTracks()[0].onended = () => cleanupScreenShare();
+
+          } catch (e: any) {
+              console.error("Screen share failed", e);
+              if (e.name === 'NotAllowedError') {
+                  alert("Permission to share screen was denied. Please try again and select a window/screen.");
+              } else if (e.name === 'NotFoundError') {
+                  alert("No screen video source found.");
+              } else {
+                  alert(`Screen share error: ${e.message || e}`);
+              }
+              cleanupScreenShare();
+          }
+      }
+  };
+
+  // Robust Screen Share Loop
+  // Only runs if we are BOTH sharing screen AND connected to Gemini
+  useEffect(() => {
+    let interval: any;
+    
+    if (isScreenSharing && isActive && videoRef.current) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        interval = setInterval(() => {
+            const video = videoRef.current;
+            if (!ctx || !video || !sessionRef.current) return;
+            
+            // Ensure video has data
+            if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+                // Resize for performance (50% scale)
+                canvas.width = video.videoWidth * 0.5;
+                canvas.height = video.videoHeight * 0.5;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                
+                const base64 = canvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+                
+                sessionRef.current.then((session: any) => {
+                     session.sendRealtimeInput({
+                          media: { mimeType: 'image/jpeg', data: base64 }
+                      });
+                });
+            }
+        }, 500); // 2 FPS
+    }
+
+    return () => {
+        if (interval) clearInterval(interval);
+    };
+  }, [isScreenSharing, isActive]);
+
+
   useEffect(() => {
     return () => {
-        // Cleanup on unmount
         stopSession();
     };
   }, []);
 
   return (
-    <div className="h-full flex flex-col items-center justify-center bg-slate-900 text-white p-8 relative overflow-hidden">
-      {/* Visualizer Background (Simple Pulse) */}
-      <div className={`absolute w-[500px] h-[500px] bg-brand-500 rounded-full blur-[128px] opacity-20 transition-all duration-1000 ${isActive ? 'scale-110' : 'scale-90'}`}></div>
+    <div className="h-full flex flex-col bg-slate-900 text-white relative overflow-hidden">
+      
+      {/* Main Visual Area */}
+      <div className="flex-1 flex items-center justify-center relative p-4">
+          
+          {/* Default Pulse Animation when not sharing screen */}
+          {!isScreenSharing && (
+              <div className="relative z-10">
+                <div className={`w-32 h-32 rounded-full border-4 flex items-center justify-center transition-colors duration-300 ${isActive ? 'border-brand-400 bg-brand-900/50' : 'border-slate-700 bg-slate-800'}`}>
+                    <span className="material-symbols-outlined text-6xl">{isActive ? 'graphic_eq' : 'mic_off'}</span>
+                </div>
+                {isActive && (
+                    <>
+                        <div className="absolute -inset-4 rounded-full bg-brand-500/20 animate-ping"></div>
+                        <div className="absolute -inset-12 rounded-full bg-brand-500/10 animate-pulse"></div>
+                    </>
+                )}
+                {!isActive && (
+                    <div className="absolute top-full mt-4 text-center text-slate-500 text-sm">
+                        Tap "Start Tutor" to begin
+                    </div>
+                )}
+              </div>
+          )}
 
-      <div className="z-10 text-center space-y-8">
-        <div className="relative">
-             <div className={`w-32 h-32 rounded-full border-4 flex items-center justify-center transition-colors duration-300 ${isActive ? 'border-brand-400 bg-brand-900/50' : 'border-slate-700 bg-slate-800'}`}>
-                <span className="material-symbols-outlined text-6xl">mic</span>
-             </div>
-             {isActive && (
-                 <span className="absolute -top-1 -right-1 flex h-4 w-4">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-4 w-4 bg-red-500"></span>
-                </span>
-             )}
-        </div>
-
-        <div>
-            <h2 className="text-3xl font-bold mb-2">Live Tutor</h2>
-            <p className="text-slate-400 text-lg">{status}</p>
-        </div>
-
-        <button
-            onClick={isActive ? stopSession : startSession}
-            className={`px-8 py-4 rounded-full font-bold text-lg transition-all transform hover:scale-105 ${
-                isActive 
-                ? 'bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/30' 
-                : 'bg-brand-500 hover:bg-brand-600 text-white shadow-lg shadow-brand-500/30'
-            }`}
-        >
-            {isActive ? 'End Session' : 'Start Conversation'}
-        </button>
+          {/* Screen Share Preview */}
+          <div className={`absolute inset-0 flex items-center justify-center bg-black transition-opacity duration-300 ${isScreenSharing ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
+              <video ref={videoRef} className="max-w-full max-h-full object-contain" muted playsInline />
+              <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2 border border-white/20 z-10">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                  Sharing Screen
+              </div>
+          </div>
+          
+          {/* Status Overlay - Only shows if NOT sharing screen and NOT active, as a big CTA */}
+          {!isActive && !isScreenSharing && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                  <button 
+                      onClick={startSession}
+                      className="bg-white text-black px-8 py-4 rounded-full font-black text-xl hover:scale-105 transition-transform shadow-hard flex items-center gap-2"
+                  >
+                      <span className="material-symbols-outlined text-2xl">mic</span>
+                      START TUTOR
+                  </button>
+              </div>
+          )}
       </div>
 
-      <div className="absolute bottom-8 text-slate-500 text-sm">
-        Powered by Gemini 2.5 Flash Native Audio (Live API)
+      {/* Control Bar (Toolbar) */}
+      <div className="h-20 bg-black border-t-2 border-slate-800 flex items-center justify-center gap-6 z-30 flex-shrink-0">
+          
+          <button 
+              onClick={startSession}
+              disabled={isActive} 
+              className={`p-4 rounded-full transition-all ${isActive ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-500'}`}
+              title={isActive ? "Microphone On" : "Connect Mic"}
+          >
+              <span className="material-symbols-outlined">mic</span>
+          </button>
+
+          <button 
+              onClick={handleToggleScreenShare}
+              // Button is ALWAYS enabled now to ensure user gesture works
+              className={`p-4 rounded-full transition-all ${
+                  isScreenSharing ? 'bg-blue-500 text-white shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'bg-slate-700 text-white hover:bg-slate-600'
+              }`}
+              title="Share Screen"
+          >
+              <span className="material-symbols-outlined">{isScreenSharing ? 'stop_screen_share' : 'present_to_all'}</span>
+          </button>
+
+          <button 
+              onClick={stopSession}
+              disabled={!isActive}
+              className={`p-4 rounded-full transition-all ${!isActive ? 'bg-slate-800 text-slate-600' : 'bg-red-600 text-white hover:bg-red-500'}`}
+              title="End Session"
+          >
+              <span className="material-symbols-outlined">call_end</span>
+          </button>
+      </div>
+
+      <div className="absolute top-2 right-2 text-[10px] text-slate-500 font-mono pointer-events-none z-40">
+          {status} {isScreenSharing ? '| Sharing' : ''}
       </div>
     </div>
   );

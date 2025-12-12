@@ -682,10 +682,7 @@ export const CanvasContent: React.FC = () => {
                      </div>
                  </div>
 
-                 {/* Node Creators */}
-                 <button className="flex flex-col items-center gap-1 text-black hover:text-teal-500 transition-colors group" onClick={() => addNodeGeneric('media', {}, undefined, focusedNodeId || undefined)} title="Add Media Analyzer">
-                     <span className="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">perm_media</span>
-                 </button>
+                 {/* Node Creators - REMOVED MEDIA BUTTON */}
 
                  <button className="flex flex-col items-center gap-1 text-black hover:text-green-600 transition-colors group" onClick={() => addNodeGeneric('code', {}, undefined, focusedNodeId || undefined)} title="Add Code Sandbox">
                      <span className="material-symbols-outlined text-2xl group-hover:scale-110 transition-transform">terminal</span>
